@@ -1,0 +1,166 @@
+import streamlit as st
+import mysql.connector
+
+# Page Configuration
+st.set_page_config(page_title="EcoTrack Control System", page_icon="🌱", layout="wide")
+
+# Database Connection Helper Function
+def get_db_connection():
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="jenoshk@pereir@03022009", # Your password
+            database="EcoTrack"
+        )
+        return conn
+    except mysql.connector.Error as err:
+        st.error(f"Database Connection Error: {err}")
+        return None
+
+# --- APP UI HEADER ---
+st.title("🌱 EcoTrack Control System")
+st.markdown("---")
+
+# --- SIDEBAR NAVIGATION ---
+menu = [
+    "Add Waste Entry", 
+    "View All Logs", 
+    "Individual Ranking", 
+    "House Totals", 
+    "Add New Student", 
+    "Search Student", 
+    "Remove Student"
+]
+choice = st.sidebar.selectbox("Navigation Menu", menu)
+
+conn = get_db_connection()
+
+if conn:
+    cursor = conn.cursor()
+
+    # 1. ADD WASTE ENTRY
+    if choice == "Add Waste Entry":
+        st.header("📝 Add Waste Entry")
+        with st.form("waste_entry_form"):
+            s_id = st.text_input("Student ID")
+            w_type = st.text_input("Waste Type (e.g., Plastic, Paper)")
+            qty = st.number_input("Quantity", min_value=1, step=1)
+            pts = st.number_input("Points Earned", min_value=1, step=1)
+            submitted = st.form_submit_button("Submit Entry")
+
+            if submitted:
+                if s_id and w_type:
+                    try:
+                        sql = "INSERT INTO WasteLog (student_id, waste_type, quantity, points_earned, collection_date) VALUES (%s, %s, %s, %s, CURDATE())"
+                        cursor.execute(sql, (s_id, w_type, qty, pts))
+                        conn.commit()
+                        st.success(f"Entry logged successfully for Student ID: {s_id}")
+                    except mysql.connector.Error as err:
+                        if err.errno == 1452:
+                            st.error(f"Student ID '{s_id}' does not exist. Please register the student first.")
+                        else:
+                            st.error(f"Error: {err}")
+                else:
+                    st.warning("Please fill in all fields.")
+
+    # 2. VIEW ALL LOGS
+    elif choice == "View All Logs":
+        st.header("📋 Current Waste Logs")
+        cursor.execute("SELECT * FROM WasteLog")
+        rows = cursor.fetchall()
+        if rows:
+            st.dataframe(rows, column_config={
+                "0": "Log ID", "1": "Student ID", "2": "Waste Type", 
+                "3": "Quantity", "4": "Points", "5": "Date"
+            }, use_container_width=True)
+        else:
+            st.info("No waste logs recorded yet.")
+
+    # 3. INDIVIDUAL RANKING
+    elif choice == "Individual Ranking":
+        st.header("🏆 Individual Rankings")
+        query = "SELECT student_id, SUM(points_earned) as total FROM WasteLog GROUP BY student_id ORDER BY total DESC"
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        if rows:
+            st.dataframe(rows, column_config={"0": "Student ID", "1": "Total Points"}, use_container_width=True)
+        else:
+            st.info("No data available for rankings.")
+
+    # 4. HOUSE TOTALS
+    elif choice == "House Totals":
+        st.header("🏠 House-wise Totals")
+        query = """
+        SELECT s.house, SUM(w.points_earned) as total_points
+        FROM Students s
+        JOIN WasteLog w ON s.student_id = w.student_id
+        GROUP BY s.house
+        ORDER BY total_points DESC
+        """
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        if rows:
+            st.dataframe(rows, column_config={"0": "House", "1": "Total Points"}, use_container_width=True)
+        else:
+            st.info("No house points recorded yet.")
+
+    # 5. ADD NEW STUDENT
+    elif choice == "Add New Student":
+        st.header("👤 Register New Student")
+        with st.form("add_student_form"):
+            s_id = st.text_input("Student ID")
+            name = st.text_input("Full Name")
+            grade = st.text_input("Grade")
+            section = st.text_input("Section")
+            house = st.text_input("House")
+            submitted = st.form_submit_button("Register Student")
+
+            if submitted:
+                if s_id and name:
+                    try:
+                        sql = "INSERT INTO Students (student_id, name, grade, section, house) VALUES (%s, %s, %s, %s, %s)"
+                        cursor.execute(sql, (s_id, name, grade, section, house))
+                        conn.commit()
+                        st.success(f"Student {name} (ID: {s_id}) successfully registered!")
+                    except mysql.connector.Error as err:
+                        st.error(f"Database Error: {err}")
+                else:
+                    st.warning("Please enter at least Student ID and Name.")
+
+    # 6. SEARCH STUDENT
+    elif choice == "Search Student":
+        st.header("🔍 Search Student")
+        s_id = st.text_input("Enter Student ID to Search")
+        if st.button("Search"):
+            cursor.execute("SELECT * FROM Students WHERE student_id = %s", (s_id,))
+            result = cursor.fetchone()
+            if result:
+                st.success("Student Found!")
+                st.write(f"**ID:** {result[0]}")
+                st.write(f"**Name:** {result[1]}")
+                st.write(f"**Grade:** {result[2]}")
+                st.write(f"**Section:** {result[3]}")
+                st.write(f"**House:** {result[4]}")
+            else:
+                st.error("Student ID not found.")
+
+    # 7. REMOVE STUDENT
+    elif choice == "Remove Student":
+        st.header("❌ Remove Student")
+        s_id = st.text_input("Enter Student ID to Remove")
+        if st.button("Delete Student", type="primary"):
+            try:
+                cursor.execute("DELETE FROM Students WHERE student_id = %s", (s_id,))
+                conn.commit()
+                if cursor.rowcount > 0:
+                    st.success(f"Student {s_id} removed.")
+                else:
+                    st.warning(f"Student ID {s_id} not found.")
+            except mysql.connector.Error as err:
+                if err.errno == 1451:
+                    st.error("Cannot delete student with existing waste entries.")
+                else:
+                    st.error(f"Error: {err}")
+
+    conn.close()
